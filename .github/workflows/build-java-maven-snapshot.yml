@@ -21,7 +21,7 @@ on:
       SONAR_TOKEN:
         required: true
 jobs:
-  build:
+  build-java-maven-snapshot:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
