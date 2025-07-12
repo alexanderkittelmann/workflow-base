@@ -47,14 +47,13 @@ jobs:
                 "id": "github",
                 "username": "${{ github.repository_owner }}",
                 "password": "${{ secrets.ACCESS_TOKEN }}"
+            },
+            {
+                "id": "github2",
+                "username": "${{ github.repository_owner }}",
+                "password": "${{ secrets.ACCESS_TOKEN }}"
             }]
-          repositories: |
-            [{
-              "id": "github2",
-              "name": "github2",
-              "url": "${{ inputs.maven_internal-apis_repo_url }}",
-              "snapshots": { "enabled": true }
-            }]
+          repositories: '[{"id":"github2","name":"github2","url":"${{ inputs.maven_internal-apis_repo_url }}","snapshots":{"enabled":true}}]'
           githubServer: false
 
       - name: Configure git
