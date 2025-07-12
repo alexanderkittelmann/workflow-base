@@ -20,12 +20,6 @@ on:
         required: true
       SONAR_TOKEN:
         required: true
-      GIT_PACKAGES_USER:
-        required: true
-      GITHUB_TOKEN:
-        required: true
-    # Du kannst hier weitere secrets definieren, die der Workflow braucht
-
 jobs:
   build:
     runs-on: ubuntu-latest
