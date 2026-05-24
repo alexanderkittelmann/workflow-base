@@ -60,10 +60,17 @@ jobs:
         id: tag
         run: echo "VERSION=$(echo $GITHUB_REF | cut -d / -f 3)" >> $GITHUB_ENV
 
+      # Multi-arch Docker buildx (linux/arm64 + linux/amd64) is the most
+      # expensive stage on this workflow. PR pushes don't need a published
+      # image -- the maven build + tests above cover correctness. Skip the
+      # Docker steps unless we're publishing from main, to save Actions
+      # minutes (mirrors hotstox-frontend build-test.yml).
       - name: Set up Docker Buildx
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: docker buildx create --use
 
       - name: Build Docker image
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         working-directory: ./
         env:
           GITHUB_ACTOR: ${{ secrets.GIT_PACKAGES_USER }}
