@@ -52,9 +52,15 @@ jobs:
           githubServer: false
 
       - name: Build and test
+        run: mvn clean package verify
+
+      # Dependabot PRs don't get secrets, so SonarQube would fail.
+      # We skip the scan for Dependabot-authored runs but still run the rest.
+      - name: SonarQube scan
+        if: github.actor != 'dependabot[bot]'
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: mvn clean package verify org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.projectKey=${{ inputs.sonar_project_key }}
+        run: mvn org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.projectKey=${{ inputs.sonar_project_key }}
 
       - name: Get the version
         id: tag
