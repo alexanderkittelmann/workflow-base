@@ -32,7 +32,24 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
           check-latest: true
+          # `cache: maven` restores ~/.m2/repository before any subsequent step,
+          # keyed on the pom.xml hash. Replaces the previous manual
+          # actions/cache step that lived at the bottom of the job and so
+          # never actually restored the cache before `mvn` ran.
           cache: maven
+
+      # Sonar's scanner CLI downloads a private JRE + plugins (~100 MB) into
+      # ~/.sonar/cache on first run. Restore that BEFORE the SonarQube scan
+      # step so the JRE comes from cache instead of the network. (The
+      # previous workflow had this step at the very end of the job, so the
+      # save worked but the restore never fired in time.)
+      - name: Cache SonarQube packages
+        if: github.actor != 'dependabot[bot]'
+        uses: actions/cache@v5
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
 
       - name: maven-settings
         uses: s4u/maven-settings-action@v4.0.0
@@ -86,17 +103,3 @@ jobs:
         run: |
           docker login ghcr.io/$GITHUB_ACTOR -u=$GITHUB_ACTOR -p=$GIT_PACKAGE_PASSWORD
           docker buildx build --platform linux/arm64,linux/amd64 -t ghcr.io/$GITHUB_OWNER/${{ inputs.docker_image_name }}:$ACTUAL_TAG --push .
-
-      - name: Cache SonarQube packages
-        uses: actions/cache@v5
-        with:
-          path: ~/.sonar/cache
-          key: ${{ runner.os }}-sonar
-          restore-keys: ${{ runner.os }}-sonar
-
-      - name: Cache Maven packages
-        uses: actions/cache@v5
-        with:
-          path: ~/.m2
-          key: ${{ runner.os }}-m2-${{ hashFiles('**/pom.xml') }}
-          restore-keys: ${{ runner.os }}-m2
