@@ -89,8 +89,25 @@ jobs:
           repositories: '[{"id":"github2","name":"github2","url":"${{ inputs.maven_internal-apis_repo_url }}","snapshots":{"enabled":true}}]'
           githubServer: false
 
+      # Pin Maven to the repo's committed wrapper (./mvnw) when present, so the
+      # build runs the version-controlled Maven (e.g. 3.9.10) instead of the
+      # runner's ambient `mvn`. Self-hosted runners install Maven via
+      # `apt-get install maven`, which can resolve an ancient surefire (2.17)
+      # that silently discovers ZERO JUnit 5 tests -> empty JaCoCo -> 0% Sonar
+      # coverage while the build still goes green. The wrapper makes Maven
+      # identical on GitHub-hosted and self-hosted runners. Repos without a
+      # wrapper fall back to ambient `mvn`.
+      - name: Resolve Maven (prefer the committed wrapper)
+        run: |
+          if [ -f ./mvnw ]; then
+            chmod +x ./mvnw
+            echo "MVN=./mvnw" >> "$GITHUB_ENV"
+          else
+            echo "MVN=mvn" >> "$GITHUB_ENV"
+          fi
+
       - name: Build and test
-        run: mvn clean package verify
+        run: $MVN clean package verify
 
       # Dependabot PRs don't get secrets, so SonarQube would fail.
       # We skip the scan for Dependabot-authored runs but still run the rest.
@@ -98,7 +115,7 @@ jobs:
         if: github.actor != 'dependabot[bot]'
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: mvn org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.projectKey=${{ inputs.sonar_project_key }}
+        run: $MVN org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.projectKey=${{ inputs.sonar_project_key }}
 
       - name: Get the version
         id: tag
