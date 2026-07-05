@@ -12,6 +12,16 @@ on:
       maven_internal-apis_repo_url:
         required: true
         type: string
+      runs-on:
+        description: 'Runner labels as a JSON array string (mirrors the snapshot workflow). Default keeps GitHub-hosted; pass e.g. ''["self-hosted", "build"]'' to run on a self-hosted runner.'
+        required: false
+        type: string
+        default: '["ubuntu-latest"]'
+      docker_platforms:
+        description: 'Buildx target platforms. Default is multi-arch; pass ''linux/amd64'' for an amd64-only build (avoids QEMU on an amd64 self-hosted runner).'
+        required: false
+        type: string
+        default: 'linux/arm64,linux/amd64'
     secrets:
       ACCESS_TOKEN:
         required: true
@@ -21,7 +31,7 @@ env:
 
 jobs:
   build-java-maven-release:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(inputs.runs-on) }}
     permissions:
       contents: write
       packages: write
@@ -87,7 +97,7 @@ jobs:
           ACTUAL_TAG: ${{ inputs.release_tag }}
         run: |
           docker login ghcr.io/$GITHUB_ACTOR -u=$GITHUB_ACTOR -p=$GIT_PACKAGE_PASSWORD
-          docker buildx build --platform linux/arm64,linux/amd64 -t ghcr.io/$GITHUB_ACTOR/${{ inputs.docker_image_name }}:$ACTUAL_TAG -t ghcr.io/$GITHUB_ACTOR/${{ inputs.docker_image_name }}:latest --push .
+          docker buildx build --platform ${{ inputs.docker_platforms }} -t ghcr.io/$GITHUB_ACTOR/${{ inputs.docker_image_name }}:$ACTUAL_TAG -t ghcr.io/$GITHUB_ACTOR/${{ inputs.docker_image_name }}:latest --push .
 
       - name: Perform release
         env:
