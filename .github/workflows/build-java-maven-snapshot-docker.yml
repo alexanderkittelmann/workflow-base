@@ -133,6 +133,11 @@ jobs:
         # `docker buildx create --use` builders (infra#180 / workflow-base#10).
         uses: docker/setup-buildx-action@v4
 
+      # Pushes two tags: the mutable branch tag (`:main`) for anything that still
+      # floats, plus an immutable `:sha-<7>` tag. GitOps CD (infra#161) pins dev's
+      # overlay to the `:sha-<7>` — a floating `:main` never changes the manifest
+      # `image:` string, so the reconciler would never detect a new image. Same
+      # sha tag format as hotstox-frontend's build-test.yml.
       - name: Build Docker image
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         working-directory: ./
@@ -143,4 +148,9 @@ jobs:
           ACTUAL_TAG: ${{ env.VERSION }}
         run: |
           docker login ghcr.io/$GITHUB_ACTOR -u=$GITHUB_ACTOR -p=$GIT_PACKAGE_PASSWORD
-          docker buildx build --platform linux/arm64,linux/amd64 -t ghcr.io/$GITHUB_OWNER/${{ inputs.docker_image_name }}:$ACTUAL_TAG --push .
+          image="ghcr.io/$GITHUB_OWNER/${{ inputs.docker_image_name }}"
+          sha_tag="sha-${GITHUB_SHA::7}"
+          docker buildx build --platform linux/arm64,linux/amd64 \
+            -t "${image}:${ACTUAL_TAG}" \
+            -t "${image}:${sha_tag}" \
+            --push .
