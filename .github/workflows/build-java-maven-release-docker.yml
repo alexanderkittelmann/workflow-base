@@ -86,7 +86,10 @@ jobs:
         run: echo "version=$(mvn -q -Dexec.executable=echo -Dexec.args='${project.version}' --non-recursive exec:exec)" >> $GITHUB_ENV
 
       - name: Set up Docker Buildx
-        run: docker buildx create --use
+        # Self-cleaning: creates a multi-arch-capable builder AND removes it in
+        # its post-step, so the self-hosted runner doesn't accumulate orphaned
+        # `docker buildx create --use` builders (infra#180 / workflow-base#10).
+        uses: docker/setup-buildx-action@v4
 
       - name: Build Docker image
         working-directory: ./
