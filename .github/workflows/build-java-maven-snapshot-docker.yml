@@ -19,6 +19,27 @@ on:
         required: false
         type: string
         default: '["ubuntu-latest"]'
+      # Optional: push the snapshot image to a plain-HTTP registry reachable from
+      # the runner (a self-hosted Nexus) INSTEAD of ghcr.io. Leave it unset and
+      # this workflow behaves exactly as before -- the input is additive, so
+      # existing callers are unaffected.
+      #
+      # Expects `<host>:<port>`, no scheme and no trailing slash, e.g.
+      # `192.168.188.192:32000`. The image is pushed as
+      # `<docker_registry>/<docker_image_name>` -- WITHOUT the ghcr `<owner>/`
+      # segment, since a self-hosted registry has no owner namespace.
+      #
+      # Requires the runner to expose the registry password in its environment as
+      # NEXUS_RUNNER_PASSWORD (see the auth step for why that is an environment
+      # value rather than a secret input).
+      docker_registry:
+        required: false
+        type: string
+        default: ''
+      docker_registry_user:
+        required: false
+        type: string
+        default: 'hotstox-runner'
     secrets:
       ACCESS_TOKEN:
         required: true
@@ -126,12 +147,75 @@ jobs:
       # image -- the maven build + tests above cover correctness. Skip the
       # Docker steps unless we're publishing from main, to save Actions
       # minutes (mirrors hotstox-frontend build-test.yml).
+      # Optional self-hosted-registry auth (infra#338 Phase B). No-op unless the
+      # caller passes `docker_registry`, so existing callers are unaffected.
+      #
+      # The credential is written straight into a job-scoped DOCKER_CONFIG rather
+      # than via `docker login`: the CLI's login round-trips the DAEMON, which
+      # refuses a plain-HTTP registry unless it is in daemon.json
+      # insecure-registries. buildkit does the push itself and only reads the
+      # credential file, so this needs no host-level change. A job-scoped config
+      # also keeps the credential out of a shared runner's ~/.docker/config.json.
+      #
+      # ORDER MATTERS: DOCKER_CONFIG must be exported BEFORE setup-buildx-action,
+      # because buildx stores builder state under $DOCKER_CONFIG/buildx. Setting
+      # it afterwards makes the build step (and the action's own cleanup
+      # post-step) fail with `ERROR: no builder "..." found`.
+      - name: Configure self-hosted registry auth
+        id: registry-auth
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          REGISTRY: ${{ inputs.docker_registry }}
+          REGISTRY_USER: ${{ inputs.docker_registry_user }}
+        run: |
+          set -euo pipefail
+          # Emit an (empty) buildkitd config either way, so the buildx step below
+          # can reference the output unconditionally.
+          {
+            echo "buildkitd_config<<__EOF__"
+          } > "${RUNNER_TEMP}/bk.txt"
+          if [ -z "${REGISTRY}" ]; then
+            echo "__EOF__" >> "${RUNNER_TEMP}/bk.txt"
+            cat "${RUNNER_TEMP}/bk.txt" >> "$GITHUB_OUTPUT"
+            echo "No docker_registry input — pushing to ghcr.io as before."
+            exit 0
+          fi
+          # NEXUS_RUNNER_PASSWORD comes from the self-hosted runner's on-node
+          # service environment, not `secrets.*` -- the registry is node-local, so
+          # a repository secret would be unusable from a GitHub-hosted runner
+          # anyway. That also means GitHub does not auto-mask it.
+          if [ -z "${NEXUS_RUNNER_PASSWORD:-}" ]; then
+            echo "::error::docker_registry='${REGISTRY}' was requested but NEXUS_RUNNER_PASSWORD is not set on this runner."
+            exit 1
+          fi
+          echo "::add-mask::${NEXUS_RUNNER_PASSWORD}"
+          auth=$(printf '%s:%s' "${REGISTRY_USER}" "${NEXUS_RUNNER_PASSWORD}" | base64 -w0)
+          echo "::add-mask::${auth}"
+          cfg="${RUNNER_TEMP}/docker-config"
+          mkdir -p "$cfg"
+          printf '{"auths":{"%s":{"auth":"%s"}}}' "${REGISTRY}" "${auth}" > "${cfg}/config.json"
+          chmod 600 "${cfg}/config.json"
+          echo "DOCKER_CONFIG=${cfg}" >> "$GITHUB_ENV"
+          # buildkit does not read the docker daemon's insecure-registries; a
+          # plain-HTTP registry must be declared in buildkit's own config or the
+          # push fails the TLS handshake.
+          {
+            printf '[registry."%s"]\n' "${REGISTRY}"
+            printf '  http = true\n'
+            echo "__EOF__"
+          } >> "${RUNNER_TEMP}/bk.txt"
+          cat "${RUNNER_TEMP}/bk.txt" >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         # Self-cleaning: creates a multi-arch-capable builder AND removes it in
         # its post-step, so the self-hosted runner doesn't accumulate orphaned
         # `docker buildx create --use` builders (infra#180 / workflow-base#10).
         uses: docker/setup-buildx-action@v4
+        with:
+          # Empty (and therefore inert) unless the caller opted in via
+          # `docker_registry` -- see the auth step above.
+          buildkitd-config-inline: ${{ steps.registry-auth.outputs.buildkitd_config }}
 
       # Pushes two tags: the mutable branch tag (`:main`) for anything that still
       # floats, plus an immutable `:sha-<7>` tag. GitOps CD (infra#161) pins dev's
@@ -146,11 +230,21 @@ jobs:
           GITHUB_OWNER: ${{ github.repository_owner }}
           GIT_PACKAGE_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
           ACTUAL_TAG: ${{ env.VERSION }}
+          REGISTRY: ${{ inputs.docker_registry }}
         run: |
-          docker login ghcr.io/$GITHUB_ACTOR -u=$GITHUB_ACTOR -p=$GIT_PACKAGE_PASSWORD
-          image="ghcr.io/$GITHUB_OWNER/${{ inputs.docker_image_name }}"
+          if [ -n "${REGISTRY}" ]; then
+            # Self-hosted registry (infra#338 Phase B). No `docker login` -- the
+            # credential was already written into the job-scoped DOCKER_CONFIG,
+            # and login would round-trip the daemon, which refuses plain HTTP.
+            # No `<owner>/` segment: a self-hosted registry has no owner namespace.
+            image="${REGISTRY}/${{ inputs.docker_image_name }}"
+          else
+            docker login ghcr.io/$GITHUB_ACTOR -u=$GITHUB_ACTOR -p=$GIT_PACKAGE_PASSWORD
+            image="ghcr.io/$GITHUB_OWNER/${{ inputs.docker_image_name }}"
+          fi
           sha_tag="sha-${GITHUB_SHA::7}"
           docker buildx build --platform linux/arm64,linux/amd64 \
             -t "${image}:${ACTUAL_TAG}" \
             -t "${image}:${sha_tag}" \
             --push .
+          echo "Published ${image}:${ACTUAL_TAG} and ${image}:${sha_tag}" >> "${GITHUB_STEP_SUMMARY}"
