@@ -59,11 +59,31 @@ jobs:
                 "password": "${{ secrets.ACCESS_TOKEN }}"
             },
             {
-                "id": "github2",
-                "username": "${{ github.repository_owner }}",
-                "password": "${{ secrets.ACCESS_TOKEN }}"
+                "id": "nexus",
+                "username": "hotstox-runner",
+                "password": "${env.NEXUS_RUNNER_PASSWORD}"
             }]
-          repositories: '[{"id":"github2","name":"github2","url":"${{ inputs.maven_internal-apis_repo_url }}","snapshots":{"enabled":true}}]'
+          # internal-apis SDK now resolves from the in-cluster Nexus (maven-public
+          # group) instead of GitHub Packages (infra#364). The server password is
+          # the LITERAL string `${env.NEXUS_RUNNER_PASSWORD}` -- Maven interpolates
+          # it from the self-hosted runner's on-node environment at resolve time
+          # (same pattern as the internal-apis release workflow). It is NOT a
+          # `secrets.*`, so it cannot be passed via `${{ }}`; the literal also
+          # keeps the real password out of the written settings.xml.
+          repositories: '[{"id":"nexus","name":"nexus","url":"${{ inputs.maven_internal-apis_repo_url }}","snapshots":{"enabled":true}}]'
+          # Nexus is served over plain HTTP (LAN NodePort). Maven 3.8.1+ ships a
+          # built-in `maven-default-http-blocker` mirror (mirrorOf
+          # `external:http:*`) that refuses HTTP repositories. Redefine that id
+          # with an inert mirrorOf so this user-settings entry overrides the
+          # global blocker (settings merge is by id) and the LAN-IP HTTP repo is
+          # allowed. Maven Central stays HTTPS + direct, unmirrored.
+          mirrors: |
+            [{
+                "id": "maven-default-http-blocker",
+                "name": "nexus-http-unblock",
+                "mirrorOf": "dummy-disabled-http-blocker",
+                "url": "http://0.0.0.0/"
+            }]
           githubServer: false
 
       - name: Configure git
