@@ -22,6 +22,30 @@ on:
         required: false
         type: string
         default: 'linux/arm64,linux/amd64'
+      # Optional: ADDITIONALLY push the release image to a plain-HTTP registry
+      # reachable from the runner (the in-cluster Nexus) on top of ghcr.io. Unlike
+      # the snapshot workflow (which moves dev churn OFF ghcr), the release build
+      # is a DUAL push: ghcr.io stays the cold DR anchor and Nexus becomes the
+      # host prod pulls from without touching ghcr's private-package quota
+      # (infra#364 Phase C). Leave it unset and this workflow behaves exactly as
+      # before -- ghcr-only -- so existing callers are unaffected.
+      #
+      # Expects `<host>:<port>`, no scheme and no trailing slash, e.g.
+      # `192.168.188.192:32000`. The image is pushed as
+      # `<docker_registry>/<docker_image_name>` -- WITHOUT the ghcr `<owner>/`
+      # segment, since a self-hosted registry has no owner namespace.
+      #
+      # Requires the runner to expose the registry password in its environment as
+      # NEXUS_RUNNER_PASSWORD (see the auth step for why that is an environment
+      # value rather than a secret input).
+      docker_registry:
+        required: false
+        type: string
+        default: ''
+      docker_registry_user:
+        required: false
+        type: string
+        default: 'hotstox-runner'
     secrets:
       ACCESS_TOKEN:
         required: true
@@ -105,11 +129,76 @@ jobs:
         id: pom-version
         run: echo "version=$(mvn -q -Dexec.executable=echo -Dexec.args='${project.version}' --non-recursive exec:exec)" >> $GITHUB_ENV
 
+      # Optional self-hosted-registry auth (infra#364 Phase C). No-op unless the
+      # caller passes `docker_registry`, so ghcr-only callers are unaffected.
+      #
+      # The Nexus credential is written straight into a job-scoped DOCKER_CONFIG
+      # rather than via `docker login`: the CLI's login round-trips the DAEMON,
+      # which refuses a plain-HTTP registry unless it is in daemon.json
+      # insecure-registries. buildkit does the push itself and only reads the
+      # credential file. The subsequent ghcr `docker login` in the Build step
+      # writes INTO this same DOCKER_CONFIG, so one buildx invocation carries
+      # credentials for BOTH registries -- that is what makes the dual push work.
+      # A job-scoped config also keeps the credential off a shared runner's
+      # ~/.docker/config.json.
+      #
+      # ORDER MATTERS: DOCKER_CONFIG must be exported BEFORE setup-buildx-action,
+      # because buildx stores builder state under $DOCKER_CONFIG/buildx. Setting
+      # it afterwards makes the build step (and the action's own cleanup
+      # post-step) fail with `ERROR: no builder "..." found`.
+      - name: Configure self-hosted registry auth
+        id: registry-auth
+        env:
+          NEXUS_REGISTRY: ${{ inputs.docker_registry }}
+          NEXUS_REGISTRY_USER: ${{ inputs.docker_registry_user }}
+        run: |
+          set -euo pipefail
+          # Emit an (empty) buildkitd config either way, so the buildx step below
+          # can reference the output unconditionally.
+          {
+            echo "buildkitd_config<<__EOF__"
+          } > "${RUNNER_TEMP}/bk.txt"
+          if [ -z "${NEXUS_REGISTRY}" ]; then
+            echo "__EOF__" >> "${RUNNER_TEMP}/bk.txt"
+            cat "${RUNNER_TEMP}/bk.txt" >> "$GITHUB_OUTPUT"
+            echo "No docker_registry input — pushing to ghcr.io only, as before."
+            exit 0
+          fi
+          # NEXUS_RUNNER_PASSWORD comes from the self-hosted runner's on-node
+          # service environment, not `secrets.*` -- the registry is node-local, so
+          # a repository secret would be unusable from a GitHub-hosted runner
+          # anyway. That also means GitHub does not auto-mask it.
+          if [ -z "${NEXUS_RUNNER_PASSWORD:-}" ]; then
+            echo "::error::docker_registry='${NEXUS_REGISTRY}' was requested but NEXUS_RUNNER_PASSWORD is not set on this runner."
+            exit 1
+          fi
+          echo "::add-mask::${NEXUS_RUNNER_PASSWORD}"
+          auth=$(printf '%s:%s' "${NEXUS_REGISTRY_USER}" "${NEXUS_RUNNER_PASSWORD}" | base64 -w0)
+          echo "::add-mask::${auth}"
+          cfg="${RUNNER_TEMP}/docker-config"
+          mkdir -p "$cfg"
+          printf '{"auths":{"%s":{"auth":"%s"}}}' "${NEXUS_REGISTRY}" "${auth}" > "${cfg}/config.json"
+          chmod 600 "${cfg}/config.json"
+          echo "DOCKER_CONFIG=${cfg}" >> "$GITHUB_ENV"
+          # buildkit does not read the docker daemon's insecure-registries; a
+          # plain-HTTP registry must be declared in buildkit's own config or the
+          # push fails the TLS handshake.
+          {
+            printf '[registry."%s"]\n' "${NEXUS_REGISTRY}"
+            printf '  http = true\n'
+            echo "__EOF__"
+          } >> "${RUNNER_TEMP}/bk.txt"
+          cat "${RUNNER_TEMP}/bk.txt" >> "$GITHUB_OUTPUT"
+
       - name: Set up Docker Buildx
         # Self-cleaning: creates a multi-arch-capable builder AND removes it in
         # its post-step, so the self-hosted runner doesn't accumulate orphaned
         # `docker buildx create --use` builders (infra#180 / workflow-base#10).
         uses: docker/setup-buildx-action@v4
+        with:
+          # Empty (and therefore inert) unless the caller opted in via
+          # `docker_registry` -- see the auth step above.
+          buildkitd-config-inline: ${{ steps.registry-auth.outputs.buildkitd_config }}
 
       - name: Build Docker image
         working-directory: ./
@@ -118,9 +207,28 @@ jobs:
           GIT_PACKAGE_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REGISTRY: ${{ env.REGISTRY }}
           ACTUAL_TAG: ${{ inputs.release_tag }}
+          NEXUS_REGISTRY: ${{ inputs.docker_registry }}
         run: |
+          set -euo pipefail
+          # Always push the release image to ghcr.io (the cold DR anchor). The
+          # login writes into the same job-scoped DOCKER_CONFIG the auth step
+          # created for Nexus, so buildx below can push to both in one shot.
           docker login ghcr.io/$GITHUB_ACTOR -u=$GITHUB_ACTOR -p=$GIT_PACKAGE_PASSWORD
-          docker buildx build --platform ${{ inputs.docker_platforms }} -t ghcr.io/$GITHUB_ACTOR/${{ inputs.docker_image_name }}:$ACTUAL_TAG -t ghcr.io/$GITHUB_ACTOR/${{ inputs.docker_image_name }}:latest --push .
+          ghcr_image="ghcr.io/$GITHUB_ACTOR/${{ inputs.docker_image_name }}"
+          tags=(-t "${ghcr_image}:${ACTUAL_TAG}" -t "${ghcr_image}:latest")
+          if [ -n "${NEXUS_REGISTRY:-}" ]; then
+            # ADDITIONALLY push to the in-cluster Nexus (infra#364 Phase C) so prod
+            # pulls the release from localhost:32000, not ghcr. No `<owner>/`
+            # segment: a self-hosted registry has no owner namespace. A Nexus push
+            # failure fails the whole release ON PURPOSE -- the prod-overlay bump
+            # PR that follows a release pins this tag for a Nexus pull, so the
+            # "a released tag exists in Nexus" invariant must hold or prod
+            # ImagePullBackOffs. ghcr already got the DR copy; recover forward.
+            nexus_image="${NEXUS_REGISTRY}/${{ inputs.docker_image_name }}"
+            tags+=(-t "${nexus_image}:${ACTUAL_TAG}" -t "${nexus_image}:latest")
+            echo "Dual-push: ghcr.io + ${NEXUS_REGISTRY}"
+          fi
+          docker buildx build --platform ${{ inputs.docker_platforms }} "${tags[@]}" --push .
 
       - name: Perform release
         env:
