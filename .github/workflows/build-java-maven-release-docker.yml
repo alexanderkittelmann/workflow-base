@@ -224,9 +224,20 @@ jobs:
             # PR that follows a release pins this tag for a Nexus pull, so the
             # "a released tag exists in Nexus" invariant must hold or prod
             # ImagePullBackOffs. ghcr already got the DR copy; recover forward.
+            #
+            # ONLY the immutable version tag goes to Nexus -- NOT a mutable
+            # `latest`. The Nexus target is the `docker-releases` repo, whose
+            # deployment policy DISABLES redeploy (that is the whole reason for the
+            # :32002/`docker-releases` vs :32000/`docker-hosted` split -- releases
+            # are immutable so prod tags are never reaped). A `latest` tag would
+            # push once (first release, tag absent) then fail EVERY release after
+            # with `manifests/latest cannot be updated ... redeploy is not allowed`,
+            # which is exactly what broke 0.18.0. `latest` is only a human-facing
+            # convenience and lives on ghcr; prod pins the version tag, so Nexus
+            # never needs it. Do not add `:latest` here -- it re-breaks every release.
             nexus_image="${NEXUS_REGISTRY}/${{ inputs.docker_image_name }}"
-            tags+=(-t "${nexus_image}:${ACTUAL_TAG}" -t "${nexus_image}:latest")
-            echo "Dual-push: ghcr.io + ${NEXUS_REGISTRY}"
+            tags+=(-t "${nexus_image}:${ACTUAL_TAG}")
+            echo "Dual-push: ghcr.io (:${ACTUAL_TAG} + :latest) + ${NEXUS_REGISTRY} (:${ACTUAL_TAG} only)"
           fi
           docker buildx build --platform ${{ inputs.docker_platforms }} "${tags[@]}" --push .
 
