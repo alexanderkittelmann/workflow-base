@@ -74,11 +74,15 @@ jobs:
           java-version: '21'
           distribution: 'temurin'
           check-latest: true
-          # `cache: maven` restores ~/.m2/repository before any subsequent step,
-          # keyed on the pom.xml hash. Replaces the previous manual
-          # actions/cache step that lived at the bottom of the job and so
-          # never actually restored the cache before `mvn` ran.
-          cache: maven
+          # No `cache: maven` on purpose. The self-hosted build runner is
+          # persistent -- ~/.m2/repository already survives between jobs -- and
+          # dependencies resolve from the in-cluster Nexus over the LAN
+          # (infra#364). The setup-java cache instead tars ~/.m2 and uploads it
+          # to GitHub's Actions Cache service every run; that save post-step
+          # ("Post Set up JDK 21") crossed the home uplink and took longer than
+          # the build itself (2m32s vs 2m15s, run 31622380954). Dropping it
+          # removes a pure-overhead internet round-trip. Re-add `cache: maven`
+          # only when falling back to a GitHub-hosted (ephemeral) runner.
 
       # Sonar's scanner CLI downloads a private JRE + plugins (~100 MB) into
       # ~/.sonar/cache on first run. Restore that BEFORE the SonarQube scan
