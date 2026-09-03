@@ -57,16 +57,45 @@ jobs:
       # scan itself still runs late because it needs the build/coverage
       # output. Same dependabot carve-out as the scan + cache steps (those
       # runs don't receive repository secrets).
+      #
+      # Branch on the HTTP STATUS, not the body (FE#702). This step used to
+      # `curl -sS` (no -f, no -w) and grep the body for `"valid":true`, so ANY
+      # non-JSON response missed the grep and was reported as an invalid token.
+      # On 2026-07-16 SonarCloud 504'd and this blocked two PRs for an hour while
+      # blaming a perfectly healthy secret -- and because the step fails ~40s in,
+      # the whole suite was skipped, hiding any real regression behind the outage.
+      # A bad credential must still fail fast; an outage must not.
       - name: Validate Sonar token (fail fast)
         if: github.actor != 'dependabot[bot]'
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
           [ -n "$SONAR_TOKEN" ] || { echo "::error::SONAR_TOKEN secret is empty"; exit 1; }
-          resp=$(curl -sS -u "$SONAR_TOKEN:" https://sonarcloud.io/api/authentication/validate)
-          echo "$resp" | grep -q '"valid":true' \
-            || { echo "::error::SONAR_TOKEN invalid or expired: $resp"; exit 1; }
-          echo "Sonar token OK"
+          body="$RUNNER_TEMP/sonar-validate.json"
+          # curl's own failures (timeout, DNS, TLS) exit non-zero, and `-w` still
+          # prints `000` for them -- those are outages, not bad credentials. Don't
+          # append a fallback `000` on the failure path: curl already emitted one,
+          # and the two concatenate into a nonsense `HTTP 000000` in the warning.
+          if ! code=$(curl -sS -o "$body" -w '%{http_code}' --max-time 20 \
+                        -u "$SONAR_TOKEN:" \
+                        https://sonarcloud.io/api/authentication/validate); then
+            code="${code:-000}"
+          fi
+          case "$code" in
+            200)
+              grep -q '"valid":true' "$body" \
+                || { echo "::error::SONAR_TOKEN rejected by SonarCloud (valid:false) -- rotate the secret"; exit 1; }
+              echo "Sonar token OK"
+              ;;
+            401|403)
+              echo "::error::SONAR_TOKEN rejected by SonarCloud (HTTP $code) -- rotate the secret"
+              exit 1
+              ;;
+            *)
+              echo "::warning::SonarCloud unreachable (HTTP $code) -- skipping the token preflight. \
+          This is an outage, NOT a bad token; the scan step will surface any real problem."
+              ;;
+          esac
 
       - name: Set up JDK 21
         uses: actions/setup-java@v5
