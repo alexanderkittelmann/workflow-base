@@ -19,6 +19,14 @@ on:
         required: false
         type: string
         default: '["ubuntu-latest"]'
+      # Build JDK major (setup-java `java-version`). Additive: defaults to '21'
+      # so existing callers are unaffected; a caller compiling at a newer source
+      # level (a repo whose pom.xml <maven.compiler.release> is 25) passes
+      # `java-version: '25'` to build on that JDK. Keep it a bare major string.
+      java-version:
+        required: false
+        type: string
+        default: '21'
       # Optional: push the snapshot image to a plain-HTTP registry reachable from
       # the runner (a self-hosted Nexus) INSTEAD of ghcr.io. Leave it unset and
       # this workflow behaves exactly as before -- the input is additive, so
@@ -97,10 +105,10 @@ jobs:
               ;;
           esac
 
-      - name: Set up JDK 21
+      - name: Set up JDK ${{ inputs.java-version }}
         uses: actions/setup-java@v5
         with:
-          java-version: '21'
+          java-version: ${{ inputs.java-version }}
           distribution: 'temurin'
           check-latest: true
           # No `cache: maven` on purpose. The self-hosted build runner is
@@ -108,7 +116,7 @@ jobs:
           # dependencies resolve from the in-cluster Nexus over the LAN
           # (infra#364). The setup-java cache instead tars ~/.m2 and uploads it
           # to GitHub's Actions Cache service every run; that save post-step
-          # ("Post Set up JDK 21") crossed the home uplink and took longer than
+          # (the "Post Set up JDK" step) crossed the home uplink and took longer than
           # the build itself (2m32s vs 2m15s, run 31622380954). Dropping it
           # removes a pure-overhead internet round-trip. Re-add `cache: maven`
           # only when falling back to a GitHub-hosted (ephemeral) runner.

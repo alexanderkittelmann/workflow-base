@@ -22,6 +22,11 @@ on:
         required: false
         type: string
         default: 'linux/arm64,linux/amd64'
+      java-version:
+        description: 'Build JDK major (setup-java java-version). Additive: defaults to 21 so existing callers are unaffected; a repo compiling at a newer source level passes e.g. 25 to build on that JDK.'
+        required: false
+        type: string
+        default: '21'
       # Optional: ADDITIONALLY push the release image to a plain-HTTP registry
       # reachable from the runner (the in-cluster Nexus) on top of ghcr.io. Unlike
       # the snapshot workflow (which moves dev churn OFF ghcr), the release build
@@ -65,10 +70,10 @@ jobs:
         with:
           ref: main
 
-      - name: Set up JDK 21
+      - name: Set up JDK ${{ inputs.java-version }}
         uses: actions/setup-java@v5
         with:
-          java-version: '21'
+          java-version: ${{ inputs.java-version }}
           distribution: 'temurin'
           server-id: github
           settings-path: ${{ github.workspace }}
