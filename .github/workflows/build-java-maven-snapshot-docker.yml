@@ -57,7 +57,7 @@ jobs:
   build-java-maven-snapshot:
     runs-on: ${{ fromJSON(inputs.runs-on) }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # Fail fast: the SonarQube scan runs only after `mvn clean package
       # verify` (~3 min), so an expired/missing SONAR_TOKEN otherwise burns
@@ -106,7 +106,7 @@ jobs:
           esac
 
       - name: Set up JDK ${{ inputs.java-version }}
-        uses: actions/setup-java@v5
+        uses: actions/setup-java@v6
         with:
           java-version: ${{ inputs.java-version }}
           distribution: 'temurin'
@@ -128,7 +128,7 @@ jobs:
       # save worked but the restore never fired in time.)
       - name: Cache SonarQube packages
         if: github.actor != 'dependabot[bot]'
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ~/.sonar/cache
           key: ${{ runner.os }}-sonar
