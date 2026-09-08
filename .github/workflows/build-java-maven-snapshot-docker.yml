@@ -48,6 +48,27 @@ on:
         required: false
         type: string
         default: 'hotstox-runner'
+      # Sonar server base URL, used by the token preflight and passed to the
+      # scanner as -Dsonar.host.url (which overrides the pom's <sonar.host.url>).
+      # REQUIRED with NO default -- deliberately: a default (e.g. sonarcloud.io)
+      # would be a silent fallback that masks a misconfigured or unreachable
+      # self-hosted server by quietly retargeting a different host. Every caller
+      # states its Sonar host explicitly; an omitted input fails the workflow_call
+      # loudly. Pass the host reachable from the runner -- e.g. the tailnet ingress
+      # (https://sonarqube.tail78193f.ts.net) or SonarCloud (https://sonarcloud.io).
+      # No trailing slash.
+      sonar_host_url:
+        required: true
+        type: string
+      # When true, run the Sonar analysis (token preflight + scanner) ONLY on a
+      # push to main, never on pull requests. SonarQube Community Build has no
+      # PR/branch decoration, so a self-hosted caller sets this true and keeps
+      # `mvn verify` as the PR gate (option A). Default false preserves the
+      # SonarCloud behaviour of analysing PRs too. `mvn verify` always runs.
+      sonar_main_only:
+        required: false
+        type: boolean
+        default: false
     secrets:
       ACCESS_TOKEN:
         required: true
@@ -74,9 +95,10 @@ jobs:
       # the whole suite was skipped, hiding any real regression behind the outage.
       # A bad credential must still fail fast; an outage must not.
       - name: Validate Sonar token (fail fast)
-        if: github.actor != 'dependabot[bot]'
+        if: github.actor != 'dependabot[bot]' && (!inputs.sonar_main_only || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ inputs.sonar_host_url }}
         run: |
           [ -n "$SONAR_TOKEN" ] || { echo "::error::SONAR_TOKEN secret is empty"; exit 1; }
           body="$RUNNER_TEMP/sonar-validate.json"
@@ -86,21 +108,21 @@ jobs:
           # and the two concatenate into a nonsense `HTTP 000000` in the warning.
           if ! code=$(curl -sS -o "$body" -w '%{http_code}' --max-time 20 \
                         -u "$SONAR_TOKEN:" \
-                        https://sonarcloud.io/api/authentication/validate); then
+                        "${SONAR_HOST_URL}/api/authentication/validate"); then
             code="${code:-000}"
           fi
           case "$code" in
             200)
               grep -q '"valid":true' "$body" \
-                || { echo "::error::SONAR_TOKEN rejected by SonarCloud (valid:false) -- rotate the secret"; exit 1; }
+                || { echo "::error::SONAR_TOKEN rejected by the Sonar server (valid:false) -- rotate the secret"; exit 1; }
               echo "Sonar token OK"
               ;;
             401|403)
-              echo "::error::SONAR_TOKEN rejected by SonarCloud (HTTP $code) -- rotate the secret"
+              echo "::error::SONAR_TOKEN rejected by the Sonar server (HTTP $code) -- rotate the secret"
               exit 1
               ;;
             *)
-              echo "::warning::SonarCloud unreachable (HTTP $code) -- skipping the token preflight. \
+              echo "::warning::Sonar server unreachable (HTTP $code) -- skipping the token preflight. \
           This is an outage, NOT a bad token; the scan step will surface any real problem."
               ;;
           esac
@@ -127,7 +149,7 @@ jobs:
       # previous workflow had this step at the very end of the job, so the
       # save worked but the restore never fired in time.)
       - name: Cache SonarQube packages
-        if: github.actor != 'dependabot[bot]'
+        if: github.actor != 'dependabot[bot]' && (!inputs.sonar_main_only || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
         uses: actions/cache@v6
         with:
           path: ~/.sonar/cache
@@ -194,10 +216,10 @@ jobs:
       # Dependabot PRs don't get secrets, so SonarQube would fail.
       # We skip the scan for Dependabot-authored runs but still run the rest.
       - name: SonarQube scan
-        if: github.actor != 'dependabot[bot]'
+        if: github.actor != 'dependabot[bot]' && (!inputs.sonar_main_only || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: $MVN org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.projectKey=${{ inputs.sonar_project_key }}
+        run: $MVN org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.projectKey=${{ inputs.sonar_project_key }} -Dsonar.host.url=${{ inputs.sonar_host_url }}
 
       - name: Get the version
         id: tag
