@@ -48,31 +48,48 @@ on:
         required: false
         type: string
         default: 'hotstox-runner'
-      # Sonar server base URL, used by the token preflight and passed to the
-      # scanner as -Dsonar.host.url (which overrides the pom's <sonar.host.url>).
-      # REQUIRED with NO default -- deliberately: a default (e.g. sonarcloud.io)
-      # would be a silent fallback that masks a misconfigured or unreachable
-      # self-hosted server by quietly retargeting a different host. Every caller
-      # states its Sonar host explicitly; an omitted input fails the workflow_call
-      # loudly. Pass the host reachable from the runner -- e.g. the tailnet ingress
-      # (https://sonarqube.tail78193f.ts.net) or SonarCloud (https://sonarcloud.io).
-      # No trailing slash.
-      sonar_host_url:
+      # HYBRID Sonar routing (workflow-base v1.3.0), selected per event:
+      #   - pull_request -> sonar_host_url_pr (SonarCloud) + sonar_organization
+      #     + the SONAR_TOKEN_SONARCLOUD secret. A PR analysis scans only the
+      #     changed lines (new code), which stays under SonarCloud's 50k-LOC org
+      #     cap, so PR decoration + the new-code quality gate keep working.
+      #   - push:main -> sonar_host_url_main (self-hosted SonarQube Community
+      #     Build) + the SONAR_TOKEN secret + NO organization. Uncapped, so the
+      #     full main analysis is not rejected. Community Build has no branch mode,
+      #     so main is the only branch analysed there.
+      # This replaces the v1.2.0 `sonar_main_only` flag + single `sonar_host_url`:
+      # both events analyse now, each against its own host/token/org.
+      #
+      # SonarCloud host for the pull_request path. Default is the real SonarCloud
+      # endpoint; every reachable caller keeps it. No trailing slash.
+      sonar_host_url_pr:
+        required: false
+        type: string
+        default: 'https://sonarcloud.io'
+      # Self-hosted host for the push:main path -- e.g. the tailnet ingress
+      # (https://sonarqube.tail78193f.ts.net), reachable from the self-hosted
+      # runner. REQUIRED with NO default deliberately: a default would be a silent
+      # fallback that masks a misconfigured/unreachable self-hosted server by
+      # quietly retargeting a different host. No trailing slash.
+      sonar_host_url_main:
         required: true
         type: string
-      # When true, run the Sonar analysis (token preflight + scanner) ONLY on a
-      # push to main, never on pull requests. SonarQube Community Build has no
-      # PR/branch decoration, so a self-hosted caller sets this true and keeps
-      # `mvn verify` as the PR gate (option A). Default false preserves the
-      # SonarCloud behaviour of analysing PRs too. `mvn verify` always runs.
-      sonar_main_only:
+      # SonarCloud organization key, passed as -Dsonar.organization on the PR path
+      # ONLY (SonarCloud-only concept). Left empty (the default) it is omitted, so
+      # the self-hosted main path never receives it.
+      sonar_organization:
         required: false
-        type: boolean
-        default: false
+        type: string
+        default: ''
     secrets:
       ACCESS_TOKEN:
         required: true
+      # push:main token -- the self-hosted SonarQube analysis token.
       SONAR_TOKEN:
+        required: true
+      # pull_request token -- a SonarCloud analysis token. Separate secret so the
+      # two-token setup needs no re-swapping of SONAR_TOKEN between servers.
+      SONAR_TOKEN_SONARCLOUD:
         required: true
 jobs:
   build-java-maven-snapshot:
@@ -94,11 +111,16 @@ jobs:
       # blaming a perfectly healthy secret -- and because the step fails ~40s in,
       # the whole suite was skipped, hiding any real regression behind the outage.
       # A bad credential must still fail fast; an outage must not.
+      # Hybrid routing: the preflight curls the SAME per-event host it validates
+      # the per-event token against (main -> self-hosted + SONAR_TOKEN; PR ->
+      # SonarCloud + SONAR_TOKEN_SONARCLOUD). The host/token ternaries are safe
+      # because both branches are always non-empty (main host is required, PR host
+      # defaults to sonarcloud.io; main token is set on a main push).
       - name: Validate Sonar token (fail fast)
-        if: github.actor != 'dependabot[bot]' && (!inputs.sonar_main_only || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+        if: github.actor != 'dependabot[bot]'
         env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-          SONAR_HOST_URL: ${{ inputs.sonar_host_url }}
+          SONAR_TOKEN: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && secrets.SONAR_TOKEN || secrets.SONAR_TOKEN_SONARCLOUD }}
+          SONAR_HOST_URL: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && inputs.sonar_host_url_main || inputs.sonar_host_url_pr }}
         run: |
           [ -n "$SONAR_TOKEN" ] || { echo "::error::SONAR_TOKEN secret is empty"; exit 1; }
           body="$RUNNER_TEMP/sonar-validate.json"
@@ -149,7 +171,7 @@ jobs:
       # previous workflow had this step at the very end of the job, so the
       # save worked but the restore never fired in time.)
       - name: Cache SonarQube packages
-        if: github.actor != 'dependabot[bot]' && (!inputs.sonar_main_only || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+        if: github.actor != 'dependabot[bot]'
         uses: actions/cache@v6
         with:
           path: ~/.sonar/cache
@@ -216,10 +238,16 @@ jobs:
       # Dependabot PRs don't get secrets, so SonarQube would fail.
       # We skip the scan for Dependabot-authored runs but still run the rest.
       - name: SonarQube scan
-        if: github.actor != 'dependabot[bot]' && (!inputs.sonar_main_only || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+        if: github.actor != 'dependabot[bot]'
         env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-        run: $MVN org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.projectKey=${{ inputs.sonar_project_key }} -Dsonar.host.url=${{ inputs.sonar_host_url }}
+          SONAR_TOKEN: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && secrets.SONAR_TOKEN || secrets.SONAR_TOKEN_SONARCLOUD }}
+          SONAR_HOST_URL: ${{ (github.event_name == 'push' && github.ref == 'refs/heads/main') && inputs.sonar_host_url_main || inputs.sonar_host_url_pr }}
+        # -Dsonar.organization is appended on the PR (SonarCloud) path ONLY; the
+        # true branch of the org ternary is always the non-empty format(...), so
+        # the GHA &&/|| ternary is safe (an empty true branch would fall through
+        # to the ||). On main the condition is false, so it resolves to '' and the
+        # self-hosted server never receives an organization arg.
+        run: $MVN org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.projectKey=${{ inputs.sonar_project_key }} -Dsonar.host.url="$SONAR_HOST_URL" ${{ (!(github.event_name == 'push' && github.ref == 'refs/heads/main') && inputs.sonar_organization != '') && format('-Dsonar.organization={0}', inputs.sonar_organization) || '' }}
 
       - name: Get the version
         id: tag
