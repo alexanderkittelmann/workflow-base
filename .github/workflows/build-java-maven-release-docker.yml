@@ -246,7 +246,17 @@ jobs:
           fi
           docker buildx build --platform ${{ inputs.docker_platforms }} "${tags[@]}" --push .
 
+      # Skip the test phase in the perform fork: release:prepare above already ran
+      # `clean verify` (the full suite, incl. any Testcontainers) against the exact
+      # commit it tagged, and release:perform checks out that same immutable tag --
+      # so re-running the suite here re-tests byte-identical code for nothing. The
+      # perform build publishes nothing worth testing anyway (callers set
+      # maven.deploy.skip=true, and the Docker image is built from prepare's jar in
+      # the step above), so -Dmaven.test.skip=true (skips test compile AND run, since
+      # the output is discarded) roughly halves release CI time. -Darguments is
+      # consumed only by this forked sub-build; prepare is a separate mvn invocation
+      # and keeps testing, so a release still fails fast on a broken test.
       - name: Perform release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: mvn --batch-mode release:perform -Dusername=$GITHUB_ACTOR -Dpassword=$GITHUB_TOKEN
+        run: mvn --batch-mode release:perform -Dusername=$GITHUB_ACTOR -Dpassword=$GITHUB_TOKEN -Darguments="-Dmaven.test.skip=true"
