@@ -10,6 +10,7 @@ Reusable GitHub Actions workflows + composite actions shared by the HotStox repo
 | `.github/workflows/build-java-maven-snapshot-docker.yml` | PR + `push:main` build: `mvn clean package verify`, self-hosted SonarQube scan, snapshot image | hotstox-backend `build-snapshot.yml` (+ other Java repos) |
 | `.github/workflows/build-java-maven-release-docker.yml` | `release: created` build: `release:prepare/perform`, release image | hotstox-backend `build-release.yml` |
 | `.github/actions/sonar-pr-new-issues/` | Composite action: fail a PR on SonarQube issues on changed lines (Node, `check.mjs`) | hotstox-backend, hotstox-frontend |
+| `.github/actions/sonar-gate-tracking-issue/` | Composite action: one open issue while the `main` quality gate is red (Node, `track.mjs`) | hotstox-backend, hotstox-frontend |
 
 ## Versioning + release
 
@@ -31,7 +32,13 @@ Reusable GitHub Actions workflows + composite actions shared by the HotStox repo
   so it needs `fetch-depth: 2`), annotates them, fails the job, and deletes the scratch project.
   Server unreachable -> warning, never a red PR. The token needs `scan` + `provisioning` (+ project admin to
   delete; a failed delete is only a warning).
-- Test the action: `node --test .github/actions/sonar-pr-new-issues/`.
+- **Red gate on `main` -> tracking issue (workflow-base#30).** `sonar-gate-tracking-issue` waits for the analysis of
+  the pushed commit, reads its gate and keeps ONE open issue (label `sonar-gate`, found by an HTML marker in the
+  body): red = open/update it with every open new-code finding (`inNewCodePeriod=true`), green = comment + close.
+  It never fails on the gate itself (the caller's gate step does); a Sonar outage is a warning. Output `opened`
+  is `true` only on the run that opened the issue, so a caller's fix job runs once per red streak, not per push.
+  Adding the issue to a Projects v2 board needs `project-token` (a PAT): the job token cannot write user projects.
+- Test the actions: `node --test .github/actions/`.
 - Dry run against real data: in a `git worktree add --no-checkout --detach <dir> <merge-sha>` of a caller repo,
   run `check.mjs` with `SONAR_PROJECT_KEY=<main key> REVISION=<merge-sha> DELETE_PROJECT=false` -- a merged PR's
   main analysis then yields exactly the issues that PR introduced.
