@@ -68,6 +68,23 @@ on:
       sonar_host_url_main:
         required: true
         type: string
+      # Opt-in PR Sonar check (workflow-base#28). Community Build has no PR
+      # analysis and the mc1arke branch plugin lags the server version, so a
+      # same-repo, non-Dependabot PR is scanned into a per-PR SCRATCH project
+      # `<sonar_project_key>-pr-<N>` on the same host. The caller then runs the
+      # `sonar-pr-new-issues` action (this repo) with the
+      # `sonar_pr_project_key` output, which fails the PR on issues on changed
+      # lines only. Default false: existing callers are unaffected.
+      sonar_pr_scan:
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      # The scratch project the PR scan uploaded to; empty when no PR scan ran
+      # (push, Dependabot, fork PR, or sonar_pr_scan off). Gate the caller's
+      # check job on it being non-empty.
+      sonar_pr_project_key:
+        value: ${{ jobs.build-java-maven-snapshot.outputs.sonar_pr_project_key }}
     secrets:
       ACCESS_TOKEN:
         required: true
@@ -79,8 +96,18 @@ on:
 jobs:
   build-java-maven-snapshot:
     runs-on: ${{ fromJSON(inputs.runs-on) }}
+    outputs:
+      sonar_pr_project_key: ${{ steps.sonar-pr.outputs.key }}
     steps:
       - uses: actions/checkout@v7
+
+      # Decides once whether this run does the PR scan (workflow-base#28); every
+      # PR-scan step below gates on the key being non-empty. Fork PRs and
+      # Dependabot get no secrets, so they are left out like on the main path.
+      - name: Sonar PR scan target
+        id: sonar-pr
+        if: inputs.sonar_pr_scan && github.event_name == 'pull_request' && github.actor != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository
+        run: echo "key=${{ inputs.sonar_project_key }}-pr-${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
 
       # Fail fast: the SonarQube scan runs only after `mvn clean package
       # verify` (~3 min), so an expired/missing SONAR_TOKEN otherwise burns
@@ -96,11 +123,12 @@ jobs:
       # blaming a perfectly healthy secret -- and because the step fails ~40s in,
       # the whole suite was skipped, hiding any real regression behind the outage.
       # A bad credential must still fail fast; an outage must not.
-      # Sonar runs on push:main only (BE#696), so the preflight validates the
-      # self-hosted token/host directly -- no per-event ternary. It gates on the
-      # same push:main condition as the scan below.
+      # Both Sonar paths (push:main, and the opt-in PR scan of workflow-base#28)
+      # target the same self-hosted host + token, so the preflight validates it
+      # directly -- no per-event ternary. It gates on the same conditions as the
+      # two scan steps below.
       - name: Validate Sonar token (fail fast)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor != 'dependabot[bot]'
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor != 'dependabot[bot]') || steps.sonar-pr.outputs.key != ''
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ inputs.sonar_host_url_main }}
@@ -154,7 +182,7 @@ jobs:
       # previous workflow had this step at the very end of the job, so the
       # save worked but the restore never fired in time.)
       - name: Cache SonarQube packages
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor != 'dependabot[bot]'
+        if: (github.event_name == 'push' && github.ref == 'refs/heads/main' && github.actor != 'dependabot[bot]') || steps.sonar-pr.outputs.key != ''
         uses: actions/cache@v6
         with:
           path: ~/.sonar/cache
@@ -228,6 +256,27 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ inputs.sonar_host_url_main }}
         run: $MVN org.sonarsource.scanner.maven:sonar-maven-plugin:sonar -Dsonar.projectKey=${{ inputs.sonar_project_key }} -Dsonar.host.url="$SONAR_HOST_URL"
+
+      # PR scan into the per-PR scratch project (workflow-base#28), same host +
+      # token as the main scan. `sonar.scm.revision` pins the analysis to the
+      # merge commit under test, which is what the caller's `sonar-pr-new-issues`
+      # check waits for. continue-on-error: a Sonar hiccup must not red the
+      # build; the check reports a missing analysis itself (and an unreachable
+      # server there is a warning, not a failure).
+      - name: SonarQube PR scan (scratch project)
+        if: steps.sonar-pr.outputs.key != ''
+        continue-on-error: true
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ inputs.sonar_host_url_main }}
+          SONAR_PR_KEY: ${{ steps.sonar-pr.outputs.key }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: >-
+          $MVN org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
+          -Dsonar.projectKey="$SONAR_PR_KEY"
+          -Dsonar.projectName="$SONAR_PR_KEY (PR $PR_NUMBER, scratch)"
+          -Dsonar.scm.revision="$GITHUB_SHA"
+          -Dsonar.host.url="$SONAR_HOST_URL"
 
       - name: Get the version
         id: tag

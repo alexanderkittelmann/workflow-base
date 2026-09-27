@@ -1,0 +1,49 @@
+name: Sonar PR new issues
+description: >-
+  Fails a pull request on SonarQube issues that sit on lines the PR changed.
+  Reads the per-PR scratch project a PR scan uploaded to a SonarQube Community
+  Build (which has no PR analysis of its own), keeps only the issues on changed
+  lines, annotates them on the diff and deletes the scratch project
+  (workflow-base#28).
+  Requires the pull_request merge commit checked out with `fetch-depth: 2`, and
+  `node` on the runner.
+inputs:
+  sonar-token:
+    description: SonarQube token that can read issues (and delete the scratch project).
+    required: true
+  sonar-host-url:
+    description: SonarQube base URL, no trailing slash.
+    required: true
+  project-key:
+    description: The scratch project the PR scan uploaded to, e.g. `<key>-pr-<N>`.
+    required: true
+  revision:
+    description: Commit the scan analysed (the merge commit).
+    required: false
+    default: ${{ github.sha }}
+  wait-seconds:
+    description: How long to wait for the server to process the analysis.
+    required: false
+    default: '600'
+  poll-seconds:
+    description: Poll interval while waiting.
+    required: false
+    default: '10'
+  delete-project:
+    description: Delete the scratch project after reading it (best effort).
+    required: false
+    default: 'true'
+runs:
+  using: composite
+  steps:
+    - name: Check Sonar issues on changed lines
+      shell: bash
+      env:
+        SONAR_TOKEN: ${{ inputs.sonar-token }}
+        SONAR_HOST_URL: ${{ inputs.sonar-host-url }}
+        SONAR_PROJECT_KEY: ${{ inputs.project-key }}
+        REVISION: ${{ inputs.revision }}
+        WAIT_SECONDS: ${{ inputs.wait-seconds }}
+        POLL_SECONDS: ${{ inputs.poll-seconds }}
+        DELETE_PROJECT: ${{ inputs.delete-project }}
+      run: node "$GITHUB_ACTION_PATH/check.mjs"
