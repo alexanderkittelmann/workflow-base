@@ -39,6 +39,9 @@ Reusable GitHub Actions workflows + composite actions shared by the HotStox repo
   is `true` only on the run that opened the issue, so a caller's fix job runs once per red streak, not per push.
   Adding the issue to a Projects v2 board needs `project-token` (a PAT): the job token cannot write user projects.
 - Test the actions: `node --test .github/actions/`.
+- **Parse every `action.yml` before releasing** (`python -c "import yaml;yaml.safe_load(open(f))"`): an unquoted
+  `: ` inside a plain scalar (e.g. a description mentioning `issues: write`) is a YAML error that only surfaces when a
+  caller downloads the action (`Mapping values are not allowed in this context`) -- v2.2.0 shipped that way.
 - Dry run against real data: in a `git worktree add --no-checkout --detach <dir> <merge-sha>` of a caller repo,
   run `check.mjs` with `SONAR_PROJECT_KEY=<main key> REVISION=<merge-sha> DELETE_PROJECT=false` -- a merged PR's
   main analysis then yields exactly the issues that PR introduced.

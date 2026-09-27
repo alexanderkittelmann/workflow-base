@@ -21,7 +21,7 @@ inputs:
     required: false
     default: ${{ github.sha }}
   github-token:
-    description: Token with `issues: write` on this repository.
+    description: 'Token with `issues: write` on this repository.'
     required: false
     default: ${{ github.token }}
   label:
