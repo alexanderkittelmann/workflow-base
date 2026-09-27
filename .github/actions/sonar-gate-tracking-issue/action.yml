@@ -1,0 +1,89 @@
+name: Sonar gate tracking issue
+description: >-
+  Keeps one open GitHub issue while the SonarQube quality gate of the default
+  branch is red: waits for the analysis of the pushed commit, reads its gate,
+  opens (or updates) the issue labelled `label` with every open new-code
+  finding, and closes it on the first green gate (workflow-base#30). Never
+  judges the build itself; the repo's own gate step does that. Needs `node`
+  on the runner and `issues: write` on the job token.
+inputs:
+  sonar-token:
+    description: SonarQube token that can read the project's analyses and issues.
+    required: true
+  sonar-host-url:
+    description: SonarQube base URL, no trailing slash.
+    required: true
+  project-key:
+    description: SonarQube project key of the default-branch scan.
+    required: true
+  revision:
+    description: Commit the scan analysed.
+    required: false
+    default: ${{ github.sha }}
+  github-token:
+    description: Token with `issues: write` on this repository.
+    required: false
+    default: ${{ github.token }}
+  label:
+    description: Label that marks the tracking issue (created if missing).
+    required: false
+    default: sonar-gate
+  project-token:
+    description: >-
+      Optional token with Projects v2 write access. When set together with
+      `project-owner` and `project-number`, a newly opened issue is added to
+      that board. The default job token cannot write user projects.
+    required: false
+    default: ''
+  project-owner:
+    description: Login of the user or organisation that owns the board.
+    required: false
+    default: ''
+  project-number:
+    description: Number of the Projects v2 board.
+    required: false
+    default: ''
+  project-fields:
+    description: >-
+      Optional JSON object {fieldId: singleSelectOptionId} applied to the new
+      board item, e.g. Status and a phase field.
+    required: false
+    default: ''
+  wait-seconds:
+    description: How long to wait for the server to process the analysis.
+    required: false
+    default: '600'
+  poll-seconds:
+    description: Poll interval while waiting.
+    required: false
+    default: '10'
+outputs:
+  status:
+    description: Gate status of the analysed commit (OK, ERROR, or UNKNOWN when no analysis appeared).
+    value: ${{ steps.track.outputs.status }}
+  issue-number:
+    description: Number of the open tracking issue while the gate is red.
+    value: ${{ steps.track.outputs.issue-number }}
+  opened:
+    description: '`true` only when this run opened the tracking issue (a new red streak).'
+    value: ${{ steps.track.outputs.opened }}
+runs:
+  using: composite
+  steps:
+    - name: Track the quality gate in an issue
+      id: track
+      shell: bash
+      env:
+        SONAR_TOKEN: ${{ inputs.sonar-token }}
+        SONAR_HOST_URL: ${{ inputs.sonar-host-url }}
+        SONAR_PROJECT_KEY: ${{ inputs.project-key }}
+        REVISION: ${{ inputs.revision }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        LABEL: ${{ inputs.label }}
+        PROJECT_TOKEN: ${{ inputs.project-token }}
+        PROJECT_OWNER: ${{ inputs.project-owner }}
+        PROJECT_NUMBER: ${{ inputs.project-number }}
+        PROJECT_FIELDS: ${{ inputs.project-fields }}
+        WAIT_SECONDS: ${{ inputs.wait-seconds }}
+        POLL_SECONDS: ${{ inputs.poll-seconds }}
+      run: node "$GITHUB_ACTION_PATH/track.mjs"
