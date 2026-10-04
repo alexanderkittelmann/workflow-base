@@ -1,0 +1,3 @@
+
+# Claude Code hook scripts run under bash, also on Windows (Git Bash): keep LF.
+.claude/hooks/*.sh text eol=lf
