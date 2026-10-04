@@ -3,6 +3,29 @@
 Reusable GitHub Actions workflows + composite actions shared by the HotStox repos
 (`alexanderkittelmann/*`). No application code, no CI of its own.
 
+## Shared conventions (read first)
+
+The cross-repo rules (session start/end, HANDOVER format, commit style, docs-only-to-main, worktrees,
+PR + CI, GitHub auth, Board #6 hygiene + field IDs, the contract-major rule, Renovate/Dependabot gotchas,
+Sonar setup) live **once** in the docs repo:
+[`HotStox/CLAUDE-shared.md`](https://github.com/alexanderkittelmann/docs/blob/main/HotStox/CLAUDE-shared.md)
+(sibling checkout: `docs/HotStox/CLAUDE-shared.md`). A SessionStart hook (`.claude/hooks/shared-claude.sh`,
+wired in `.claude/settings.json`) locates it and tells you its path: **read it completely before starting.** If the
+hook reports it missing, or you cannot read it, **tell the user first and ask whether to continue** with only the
+essentials below; do not silently carry on. The essentials:
+
+- Commit subject `#<issue>: <type>(<scope>): <subject>`; cross-repo work gets a sibling issue in every
+  repo that gets code; `#0` only for no-issue chores and docs.
+- Docs-only edits go **directly to `main`**; workflow/action changes go through branch + PR, then a `vX.Y.Z` release.
+- Every issue **and** every PR goes on Project Board #6 with Status + Roadmap-Phase (board calls run
+  without the `GH_TOKEN=` wrapper).
+- Issues/PRs in English; PR body with `## Summary`, a `## Test plan` checklist and `Closes #<issue>`.
+- `.claude/HANDOVER.md`: ≤ 150 lines, only open items, staged in the same commit as the change.
+
+Everything below is specific to **workflow-base**.
+
+**This repo is PUBLIC:** never copy private details (board IDs, internal hosts beyond the Sonar URL already in the workflows, tokens) into it.
+
 ## Layout
 
 | Path | What | Callers |
@@ -48,6 +71,6 @@ Reusable GitHub Actions workflows + composite actions shared by the HotStox repo
 
 ## Conventions
 
-- Commits: `#<issue>: <type>(<scope>): <subject>` (Conventional Commits), identity `Claude [AI]`.
 - Self-hosted build runner: `node`, `mvn`, `docker` are on PATH; **no `jq`** (parse JSON in Node).
 - Comments in workflows explain the *why* (outages, runner quirks); keep that density.
+
