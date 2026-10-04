@@ -11,8 +11,8 @@ Sonar setup) live **once** in the docs repo:
 [`HotStox/CLAUDE-shared.md`](https://github.com/alexanderkittelmann/docs/blob/main/HotStox/CLAUDE-shared.md)
 (sibling checkout: `docs/HotStox/CLAUDE-shared.md`). A SessionStart hook (`.claude/hooks/shared-claude.sh`,
 wired in `.claude/settings.json`) locates it and tells you its path: **read it completely before starting.** If the
-hook reports it missing, or you cannot read it, **tell the user first and ask whether to continue** with only the
-essentials below; do not silently carry on. The essentials:
+hook reports it missing, a UserPromptSubmit hook **blocks every prompt** until the user resends one containing
+`OHNE-SHARED-WEITER`; if you still cannot read the file, stop and ask the user before doing anything. The essentials:
 
 - Commit subject `#<issue>: <type>(<scope>): <subject>`; cross-repo work gets a sibling issue in every
   repo that gets code; `#0` only for no-issue chores and docs.
