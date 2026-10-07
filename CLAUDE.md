@@ -1,7 +1,8 @@
 # workflow-base
 
 Reusable GitHub Actions workflows + composite actions shared by the HotStox repos
-(`alexanderkittelmann/*`). No application code, no CI of its own.
+(`alexanderkittelmann/*`). No application code. Its own CI (`.github/workflows/ci.yml`, workflow-base#34) runs the action tests and
+parses every `action.yml` + workflow on each PR and `push:main` (GitHub-hosted runner; the repo is public).
 
 ## Shared conventions (read first)
 
@@ -33,6 +34,7 @@ Everything below is specific to **workflow-base**.
 | `.github/workflows/build-java-maven-snapshot-docker.yml` | PR + `push:main` build: `mvn clean package verify`, self-hosted SonarQube scan, snapshot image | hotstox-backend `build-snapshot.yml` (+ other Java repos) |
 | `.github/workflows/build-java-maven-release-docker.yml` | `release: created` build: `release:prepare/perform`, release image | hotstox-backend `build-release.yml` |
 | `.github/actions/sonar-pr-new-issues/` | Composite action: fail a PR on SonarQube issues on changed lines (Node, `check.mjs`) | hotstox-backend, hotstox-frontend |
+| `.github/workflows/ci.yml` | This repo's own CI: `node --test .github/actions/*/*.test.mjs` + YAML parse of every `action.yml` / workflow | -- |
 | `.github/actions/sonar-gate-tracking-issue/` | Composite action: one open issue while the `main` quality gate is red (Node, `track.mjs`) | hotstox-backend, hotstox-frontend |
 
 ## Versioning + release
@@ -61,8 +63,8 @@ Everything below is specific to **workflow-base**.
   It never fails on the gate itself (the caller's gate step does); a Sonar outage is a warning. Output `opened`
   is `true` only on the run that opened the issue, so a caller's fix job runs once per red streak, not per push.
   Adding the issue to a Projects v2 board needs `project-token` (a PAT): the job token cannot write user projects.
-- Test the actions: `node --test .github/actions/`.
-- **Parse every `action.yml` before releasing** (`python -c "import yaml;yaml.safe_load(open(f))"`): an unquoted
+- Test the actions: `node --test .github/actions/*/*.test.mjs` (also runs in `ci.yml`; a release needs that check green).
+- **Every `action.yml` is parsed in CI** (`ci.yml`, PyYAML): an unquoted
   `: ` inside a plain scalar (e.g. a description mentioning `issues: write`) is a YAML error that only surfaces when a
   caller downloads the action (`Mapping values are not allowed in this context`) -- v2.2.0 shipped that way.
 - Dry run against real data: in a `git worktree add --no-checkout --detach <dir> <merge-sha>` of a caller repo,

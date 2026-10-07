@@ -1,0 +1,45 @@
+# CI of this repo itself (workflow-base#34): run the composite actions' tests and parse every
+# action.yml + workflow. v2.2.0 shipped an action.yml callers could not load ("Mapping values are not
+# allowed in this context"); a YAML error only surfaces when a caller downloads the action, so it has
+# to be caught here. The repo is public, so GitHub-hosted runners cost nothing.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
+        with:
+          node-version: 24
+
+      - name: Action tests
+        run: node --test .github/actions/*/*.test.mjs
+
+      # PyYAML reports the same "mapping values are not allowed" error the Actions runner does.
+      - name: Parse every action.yml and workflow
+        if: ${{ !cancelled() }}
+        run: |
+          python3 -c "import yaml" 2>/dev/null || python3 -m pip install --quiet pyyaml
+          python3 - .github/actions/*/action.yml .github/workflows/*.yml <<'EOF'
+          import sys, yaml
+          failed = False
+          for path in sys.argv[1:]:
+              try:
+                  with open(path, encoding="utf-8") as f:
+                      yaml.safe_load(f)
+                  print(f"ok   {path}")
+              except yaml.YAMLError as e:
+                  failed = True
+                  print(f"::error file={path}::{e}".replace("\n", " "))
+          sys.exit(1 if failed else 0)
+          EOF
