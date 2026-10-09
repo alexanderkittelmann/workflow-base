@@ -99,7 +99,7 @@ jobs:
     outputs:
       sonar_pr_project_key: ${{ steps.sonar-pr.outputs.key }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
 
       # Decides once whether this run does the PR scan (workflow-base#28); every
       # PR-scan step below gates on the key being non-empty. Fork PRs and
