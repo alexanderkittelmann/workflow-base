@@ -190,7 +190,7 @@ jobs:
           restore-keys: ${{ runner.os }}-sonar
 
       - name: maven-settings
-        uses: s4u/maven-settings-action@v4.0.0
+        uses: s4u/maven-settings-action@v4.1.0
         with:
           servers: |
             [{
