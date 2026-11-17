@@ -36,6 +36,7 @@ Everything below is specific to **workflow-base**.
 | `.github/actions/sonar-pr-new-issues/` | Composite action: fail a PR on SonarQube issues on changed lines (Node, `check.mjs`) | hotstox-backend, hotstox-frontend |
 | `.github/workflows/ci.yml` | This repo's own CI: `node --test .github/actions/*/*.test.mjs` + YAML parse of every `action.yml` / workflow | -- |
 | `.github/actions/sonar-gate-tracking-issue/` | Composite action: one open issue while the `main` quality gate is red (Node, `track.mjs`) | hotstox-backend, hotstox-frontend |
+| `.github/actions/release-sanity/` | Composite action: refuse a version that is not `X.Y.Z` or not higher than the latest release / an explicit `compare-to`; `require-release` also demands a published Release (Node, `sanity.mjs`, workflow-base#43) | release / prod-bump workflows |
 
 ## Versioning + release
 
