@@ -1,0 +1,52 @@
+name: Release sanity
+description: >-
+  Refuses a release or deployment version that is not plain X.Y.Z or that does
+  not move forward (workflow-base#43), e.g. a typo such as 3.70.0 instead of
+  8.70.0. The baseline is `compare-to` when set, else the highest published
+  release of `repository` other than `version`. With `require-release` the
+  version must also have a published GitHub Release, not just a tag. Needs
+  `node` on the runner and a token that can read the repository's releases.
+inputs:
+  version:
+    description: The version to check (X.Y.Z, an optional leading v is fine).
+    required: true
+  repository:
+    description: owner/name whose releases are the baseline.
+    required: false
+    default: ${{ github.repository }}
+  compare-to:
+    description: >-
+      Optional explicit baseline, e.g. the tag a deployment pins today. Empty =
+      the highest published release other than `version`.
+    required: false
+    default: ''
+  require-release:
+    description: '`true` = fail unless `version` has a published GitHub Release.'
+    required: false
+    default: 'false'
+  allow-lower:
+    description: '`true` = accept a version that is not higher than the baseline (a deliberate rollback).'
+    required: false
+    default: 'false'
+  github-token:
+    description: Token that can read the releases of `repository` (another private repo needs a PAT or an app token).
+    required: false
+    default: ${{ github.token }}
+outputs:
+  baseline:
+    description: The version the check compared against (empty when there was none).
+    value: ${{ steps.sanity.outputs.baseline }}
+runs:
+  using: composite
+  steps:
+    - name: Check the version
+      id: sanity
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+        REPOSITORY: ${{ inputs.repository }}
+        COMPARE_TO: ${{ inputs.compare-to }}
+        REQUIRE_RELEASE: ${{ inputs.require-release }}
+        ALLOW_LOWER: ${{ inputs.allow-lower }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: node "$GITHUB_ACTION_PATH/sanity.mjs"
